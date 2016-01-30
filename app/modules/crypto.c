@@ -5,11 +5,13 @@
 #include "platform.h"
 #include "c_types.h"
 #include "c_stdlib.h"
+#include "flash_fs.h"
 #include "../crypto/digests.h"
 
 #include "user_interface.h"
 
 #include "rom.h"
+#include <c_errno.h>
 
 /**
   * hash = crypto.sha1(input)
@@ -105,6 +107,7 @@ static int crypto_mask( lua_State* L )
 
 static inline int bad_mech (lua_State *L) { return luaL_error (L, "unknown hash mech"); }
 static inline int bad_mem  (lua_State *L) { return luaL_error (L, "insufficient memory"); }
+static inline int bad_file (lua_State *L) { return luaL_error (L, "file does not exist"); }
 
 
 /* rawdigest = crypto.hash("MD5", str)
@@ -126,6 +129,36 @@ static int crypto_lhash (lua_State *L)
   return 1;
 }
 
+/* rawdigest = crypto.hash("MD5", filename)
+ * strdigest = crypto.toHex(rawdigest)
+ */
+static int crypto_flhash (lua_State *L)
+{
+  const digest_mech_info_t *mi = crypto_digest_mech (luaL_checkstring (L, 1));
+  if (!mi)
+    return bad_mech (L);
+  const char *filename = luaL_checkstring (L, 2);
+
+  // Open the file
+  int file_fd = fs_open (filename, FS_RDONLY);
+  if(file_fd < FS_OPEN_OK) {
+    return bad_file(L);
+  }
+
+  uint8_t digest[mi->digest_size];
+  int returncode = crypto_fhash (mi, &fs_read, file_fd, digest);
+
+  fs_close(file_fd);
+
+  if (returncode == ENOMEM)
+    return bad_mem (L);
+  else if (returncode == EINVAL)
+    return bad_mech(L);
+  else
+    lua_pushlstring (L, digest, sizeof (digest));
+
+  return 1;
+}
 
 /* rawsignature = crypto.hmac("SHA1", str, key)
  * strsignature = crypto.toHex(rawsignature)
@@ -149,6 +182,7 @@ static int crypto_lhmac (lua_State *L)
 }
 
 
+
 // Module function map
 static const LUA_REG_TYPE crypto_map[] = {
   { LSTRKEY( "sha1" ),     LFUNCVAL( crypto_sha1 ) },
@@ -156,6 +190,7 @@ static const LUA_REG_TYPE crypto_map[] = {
   { LSTRKEY( "toHex" ),    LFUNCVAL( crypto_hex_encode ) },
   { LSTRKEY( "mask" ),     LFUNCVAL( crypto_mask ) },
   { LSTRKEY( "hash"   ),   LFUNCVAL( crypto_lhash ) },
+  { LSTRKEY( "fhash"  ),   LFUNCVAL( crypto_flhash ) },
   { LSTRKEY( "hmac"   ),   LFUNCVAL( crypto_lhmac ) },
   { LNILKEY, LNILVAL }
 };
